@@ -1,25 +1,26 @@
 # UniboxAI Build Phases
 
 ## Current Phase
-**Phase 0: Foundation** — Scaffold monorepo, Prisma schema, core types
+**Phase 1: Authentication & Multi-Tenancy** — In Progress
 
 ## Phases
 
-### Phase 0: Foundation
-- [ ] Monorepo structure (apps/, packages/, pnpm-workspace.yaml, root package.json)
-- [ ] `packages/database`: Prisma schema with multi-tenant safety
-- [ ] `packages/shared`: Zod schemas for messages, todos, orgs
-- [ ] git init, .gitignore
-- [ ] Verify typecheck + test commands work
-- **Blockers:** None
+### Phase 0: Foundation ✅
+- [x] Monorepo structure (apps/, packages/, pnpm-workspace.yaml, root package.json)
+- [x] `packages/database`: Prisma schema with multi-tenant safety
+- [x] `packages/shared`: Zod schemas for messages, todos, orgs
+- [x] git init, .gitignore
+- [x] Verify typecheck + test commands work
 
-### Phase 1: Authentication & Multi-Tenancy
-- [ ] Clerk webhook at `apps/web/app/api/webhooks/clerk/route.ts`
-- [ ] User sync from Clerk → Postgres
-- [ ] Role system (OWNER/MANAGER/EMPLOYEE + row-level queries)
-- [ ] Protected tRPC middleware for orgId enforcement
-- [ ] Verify multi-tenancy rules in all queries
-- **Blockers:** Phase 0
+### Phase 1: Authentication & Multi-Tenancy (In Progress)
+- [x] vitest + test infrastructure setup (database + web)
+- [x] Multi-tenancy isolation tests (orgs cannot leak data)
+- [x] Clerk webhook sync tests (user.created, user.deleted)
+- [x] tRPC auth middleware tests
+- [x] Role-based access control tests
+- [ ] Run full test suite locally
+- [ ] Fix any test failures
+- [ ] Add edge case tests (expired tokens, org deletion cascade)
 
 ### Phase 2: Dashboard Scaffold
 - [ ] Basic Next.js app layout with Clerk auth

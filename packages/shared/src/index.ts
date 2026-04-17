@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+/**
+ * Generate a CUID (K-sortable unique ID)
+ * In real usage, Prisma generates these server-side
+ */
+export function cuid(): string {
+  return `c${Date.now().toString(36)}${Math.random().toString(36).substr(2, 9)}`;
+}
+
 // ==================== Organization ====================
 export const OrganizationSchema = z.object({
   id: z.string().cuid(),
