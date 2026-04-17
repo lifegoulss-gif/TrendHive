@@ -1,5 +1,5 @@
 import { beforeEach, afterAll } from "vitest";
-import { prisma } from "../src/index";
+import { prisma } from "../index";
 
 /**
  * Reset database before each test

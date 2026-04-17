@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
-    "@prisma/client": "workspace:*",
+    "@prisma/client": "^5.14.0",
     "@repo/database": "workspace:*",
     "@repo/shared": "workspace:*",
     "bullmq": "^5.7.0",

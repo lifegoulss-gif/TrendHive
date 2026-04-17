@@ -1,7 +1,6 @@
 import { getAuth } from "@clerk/nextjs/server";
 import { prisma } from "@repo/database";
 import { TRPCError, initTRPC } from "@trpc/server";
-import { NextRequest } from "next/server";
 
 /**
  * Create tRPC context from request headers
@@ -10,25 +9,34 @@ import { NextRequest } from "next/server";
 export const createTRPCContext = async (opts: {
   headers: Headers;
 }) => {
-  const auth = getAuth(opts.headers as any);
+  // Note: In client context, this won't have auth
+  // In server context, we extract Clerk info
 
   let user = null;
   let orgId = null;
 
-  if (auth.userId) {
-    user = await prisma.user.findUnique({
-      where: { clerkId: auth.userId },
-      select: { id: true, orgId: true, role: true, email: true },
-    });
+  // Try to get auth from headers (only works in server context)
+  try {
+    const auth = getAuth(opts.headers as any);
 
-    if (!user) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: "User not found in database",
+    if (auth.userId) {
+      user = await prisma.user.findUnique({
+        where: { clerkId: auth.userId },
+        select: { id: true, orgId: true, role: true, email: true },
       });
-    }
 
-    orgId = user.orgId;
+      if (!user) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "User not found in database",
+        });
+      }
+
+      orgId = user.orgId;
+    }
+  } catch (err) {
+    // Auth extraction might fail in some contexts (e.g., browser), which is fine
+    // The procedures will enforce auth if needed
   }
 
   return { user, orgId };

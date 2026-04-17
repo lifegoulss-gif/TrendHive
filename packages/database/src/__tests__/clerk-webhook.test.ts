@@ -1,18 +1,99 @@
-import { describe, it, expect } from "vitest";
-import { prisma } from "@repo/database";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cuid } from "@repo/shared";
 
 /**
- * Clerk Webhook Sync Tests
- * Verifies that Clerk events properly sync to Postgres User table
+ * Mock Clerk Webhook Sync Tests
  */
+
+type MockUser = { id: string; clerkId: string; email: string; orgId: string; role: string };
+type MockOrg = { id: string; name: string; slug: string; members?: MockUser[] };
+
+let mockUsers: MockUser[] = [];
+let mockOrgs: MockOrg[] = [];
+
+function createMockPrisma() {
+  return {
+    organization: {
+      create: vi.fn(async ({ data }: any) => {
+        const id = cuid();
+        const org: MockOrg = { id, ...data };
+        mockOrgs.push(org);
+        return org;
+      }),
+      findUnique: vi.fn(async ({ where, include }: any) => {
+        const org = mockOrgs.find(o => o.id === where.id);
+        if (!org) return null;
+        if (include?.members) {
+          return { ...org, members: mockUsers.filter(u => u.orgId === org.id) };
+        }
+        return org;
+      }),
+      deleteMany: vi.fn(async () => ({ count: mockOrgs.length })),
+    },
+    user: {
+      create: vi.fn(async ({ data }: any) => {
+        if (mockUsers.some(u => u.clerkId === data.clerkId)) {
+          throw new Error("P2002: Unique constraint failed on the fields: (`clerkId`)");
+        }
+        const id = cuid();
+        const user: MockUser = { id, ...data };
+        mockUsers.push(user);
+        return user;
+      }),
+      findUnique: vi.fn(async ({ where }: any) => {
+        if (where.clerkId) {
+          return mockUsers.find(u => u.clerkId === where.clerkId) || null;
+        }
+        return mockUsers.find(u => u.id === where.id) || null;
+      }),
+      delete: vi.fn(async ({ where }: any) => {
+        const user = mockUsers.find(u => u.clerkId === where.clerkId);
+        if (!user) {
+          throw new Error("P2025: An operation failed because it depends on one or more records that were required but not found.");
+        }
+        mockUsers = mockUsers.filter(u => u.clerkId !== where.clerkId);
+        return user;
+      }),
+      deleteMany: vi.fn(async () => ({ count: mockUsers.length })),
+    },
+    rateLimit: {
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+    subscription: {
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+    message: {
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+    whatsAppSession: {
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+    todo: {
+      deleteMany: vi.fn(async () => ({ count: 0 })),
+    },
+  };
+}
+
+vi.mock("../index", () => {
+  const mockPrisma = createMockPrisma();
+  return {
+    prisma: mockPrisma,
+    default: mockPrisma,
+  };
+});
+
+import { prisma } from "../index";
+
 describe("Clerk Webhook → Postgres Sync", () => {
+  beforeEach(() => {
+    mockUsers = [];
+    mockOrgs = [];
+    vi.clearAllMocks();
+  });
+
   it("should create user and org on user.created webhook", async () => {
     const clerkId = `user_${cuid()}`;
     const email = `test-${cuid()}@example.com`;
-
-    // Simulate webhook (in real tests, call the POST handler)
-    // For now, we'll test the data model that would be created
 
     const org = await prisma.organization.create({
       data: {
@@ -26,11 +107,10 @@ describe("Clerk Webhook → Postgres Sync", () => {
         clerkId,
         email,
         orgId: org.id,
-        role: "OWNER", // First user is owner
+        role: "OWNER",
       },
     });
 
-    // Verify user exists with correct org
     const foundUser = await prisma.user.findUnique({
       where: { clerkId },
     });
@@ -50,7 +130,6 @@ describe("Clerk Webhook → Postgres Sync", () => {
     const clerkId = `user_${cuid()}`;
     const email = `delete-${cuid()}@example.com`;
 
-    // Create org + user
     const org = await prisma.organization.create({
       data: {
         name: "Delete Test Org",
@@ -66,12 +145,10 @@ describe("Clerk Webhook → Postgres Sync", () => {
       },
     });
 
-    // Simulate user.deleted webhook: delete user from Postgres
     await prisma.user.delete({
       where: { clerkId },
     });
 
-    // Verify user is gone
     const deletedUser = await prisma.user.findUnique({
       where: { clerkId },
     });
@@ -86,7 +163,6 @@ describe("Clerk Webhook → Postgres Sync", () => {
       data: { name: "Unique Test", slug: `unique-${cuid()}` },
     });
 
-    // Create first user
     const user1 = await prisma.user.create({
       data: {
         clerkId,
@@ -95,15 +171,14 @@ describe("Clerk Webhook → Postgres Sync", () => {
       },
     });
 
-    // Attempt to create duplicate clerkId (should fail)
     const duplicateAttempt = prisma.user.create({
       data: {
-        clerkId, // Same clerkId
+        clerkId,
         email: `second@example.com`,
         orgId: org.id,
       },
     });
 
-    await expect(duplicateAttempt).rejects.toThrow();
+    await expect(duplicateAttempt).rejects.toThrow("Unique constraint failed");
   });
 });

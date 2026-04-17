@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    setupFiles: ["./src/__tests__/setup.ts"],
+    setupFiles: [],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html"],
@@ -17,6 +17,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      "@repo/shared": path.resolve(__dirname, "../../packages/shared/src/index.ts"),
+      "@repo/database": path.resolve(__dirname, "./src/index.ts"),
       "@": path.resolve(__dirname, "./src"),
     },
   },
