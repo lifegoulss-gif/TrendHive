@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pnpm biome format --write \"$CLAUDE_FILE_PATHS\" 2>/dev/null || true",
+            "description": "Auto-format any edited file with Biome"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_FILE_PATHS\" | grep -qE '\\.(ts|tsx)$'; then pnpm typecheck 2>&1 | tail -20; fi",
+            "description": "Run TypeScript typecheck after any TS edit, show last 20 lines of output"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_FILE_PATHS\" | grep -qE '(^|/)\\.env'; then echo 'BLOCKED: .env files must not be created or modified by Claude. Add values to .env.example instead.' && exit 2; fi",
+            "description": "Block any write to .env files"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_COMMAND\" | grep -qE '(rm -rf|DROP TABLE|DROP DATABASE|prisma migrate reset|git push --force)'; then echo 'BLOCKED: dangerous command detected. Ask the user to run this manually.' && exit 2; fi",
+            "description": "Block destructive bash commands"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pnpm typecheck 2>&1 | grep -E 'error TS' | head -5",
+            "description": "Surface any remaining TS errors before Claude stops"
+          }
+        ]
+      }
+    ]
+  }
+}

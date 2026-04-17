@@ -1,0 +1,30 @@
+{
+  "name": "uniboxai",
+  "version": "0.0.0",
+  "private": true,
+  "description": "UniboxAI — WhatsApp Employee Monitor SaaS",
+  "author": "Solo Dev",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "dev:web": "pnpm --filter @repo/web dev",
+    "dev:worker": "pnpm --filter @repo/whatsapp-worker dev",
+    "build": "pnpm --recursive run build",
+    "typecheck": "pnpm --recursive run typecheck",
+    "lint": "pnpm --recursive run lint",
+    "test": "pnpm --recursive run test",
+    "test:watch": "pnpm --recursive run test:watch",
+    "db:push": "pnpm --filter @repo/database prisma db push",
+    "db:migrate": "pnpm --filter @repo/database prisma migrate dev",
+    "db:studio": "pnpm --filter @repo/database prisma studio",
+    "db:generate": "pnpm --filter @repo/database prisma generate",
+    "worker:sandbox": "pnpm --filter @repo/whatsapp-worker run sandbox"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

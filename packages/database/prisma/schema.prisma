@@ -1,0 +1,248 @@
+// UniboxAI Prisma Schema
+// Multi-tenant SaaS for unified WhatsApp inbox management
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==================== Core Entities ====================
+
+model Organization {
+  id String @id @default(cuid())
+
+  name        String
+  slug        String @unique
+  displayName String?
+  avatar      String? // URL to org logo
+
+  // Membership & Auth
+  members User[]
+
+  // WhatsApp sessions
+  sessions WhatsAppSession[]
+
+  // Messages and todos
+  messages Message[]
+  todos    Todo[]
+
+  // Billing
+  subscription Subscription?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+}
+
+model User {
+  id String @id @default(cuid())
+
+  // Clerk integration
+  clerkId String @unique
+
+  email String @unique
+  name  String?
+
+  // Organization membership
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Role-based access
+  role Role @default(EMPLOYEE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([clerkId])
+}
+
+enum Role {
+  OWNER    // Full access, billing
+  MANAGER  // Team management, analytics read
+  EMPLOYEE // Messages, own todos
+}
+
+// ==================== WhatsApp Integration ====================
+
+model WhatsAppSession {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Session metadata
+  phoneNumber String? // E164 format: +1234567890
+  name        String?
+  avatar      String? // WA profile pic URL
+
+  // Lifecycle
+  status          SessionStatus @default(DISCONNECTED)
+  lastConnectedAt DateTime?
+  lastErrorAt     DateTime?
+  errorMessage    String?
+
+  // Credentials (encrypted by Postgres)
+  authData Json? // Persisted LocalAuth data
+
+  // Messages
+  messages Message[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orgId, phoneNumber])
+  @@index([orgId])
+  @@index([status])
+}
+
+enum SessionStatus {
+  CONNECTING
+  CONNECTED
+  DISCONNECTED
+  ERROR
+}
+
+// ==================== Messages ====================
+
+model Message {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  sessionId String
+  session   WhatsAppSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  // Message content
+  from    String // Phone number
+  to      String // Phone number
+  text    String
+  direction MessageDirection
+
+  // Media
+  mediaUrl  String? // If image/audio/video
+  mediaType MediaType?
+
+  // AI processing
+  aiProcessed Boolean   @default(false)
+  todos       Todo[]
+  aiErrorAt   DateTime?
+
+  // WhatsApp metadata
+  wamId       String? @unique // WhatsApp native ID
+  timestamp   DateTime
+  isQuoted    Boolean @default(false)
+  quotedMsgId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([orgId])
+  @@index([sessionId])
+  @@index([from])
+  @@index([to])
+  @@index([aiProcessed])
+  @@index([createdAt])
+}
+
+enum MessageDirection {
+  INBOUND  // Incoming from customer
+  OUTBOUND // Sent by employee
+}
+
+enum MediaType {
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+}
+
+// ==================== AI-Extracted Todos ====================
+
+model Todo {
+  id String @id @default(cuid())
+
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  // Extracted data
+  title       String
+  description String?
+  dueDate     DateTime?
+  priority    Priority @default(NORMAL)
+
+  // Status
+  completed   Boolean  @default(false)
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([messageId])
+  @@index([completed])
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// ==================== Billing ====================
+
+model Subscription {
+  id String @id @default(cuid())
+
+  orgId String @unique
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  // Stripe integration
+  stripeCustomerId String @unique
+  stripeProductId  String?
+  stripePriceId    String?
+
+  // Status
+  status          SubscriptionStatus @default(TRIALING)
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  // Limits (per month)
+  messageLimit Int @default(10000)
+  messageUsage Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId])
+  @@index([status])
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  PAUSED
+}
+
+// ==================== Rate Limiting (optional session state) ====================
+
+model RateLimit {
+  id String @id @default(cuid())
+
+  sessionId String @unique
+  tokens    Int    @default(60) // Token bucket
+  lastReset DateTime @default(now())
+
+  @@index([sessionId])
+}
