@@ -1,6 +1,6 @@
 import "dotenv/config";
-import { initializeSession, getSession } from "./sessions";
-import { prisma } from "@repo/database";
+import { initializeSession } from "./sessions";
+import { prisma } from "./prisma.js";
 
 /**
  * Sandbox mode: spin up a throwaway WA session for testing
@@ -43,7 +43,7 @@ async function sandbox() {
     const client = await initializeSession(session.id, org.id);
 
     // Keep running until interrupted
-    await new Promise((resolve) => {
+    await new Promise((_resolve) => {
       process.on("SIGINT", async () => {
         console.log("[Sandbox] Shutting down...");
 

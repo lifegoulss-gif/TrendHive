@@ -46,3 +46,5 @@ messages.json
 # Local overrides
 CLAUDE.local.md
 .claude/local/
+.vercel
+.env*.local

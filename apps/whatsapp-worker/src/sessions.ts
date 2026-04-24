@@ -1,200 +1,250 @@
-import { prisma } from "@repo/database";
-import { Client, LocalAuth, MessageMedia } from "whatsapp-web.js";
-import qrcode from "qrcode-terminal";
+import { prisma } from "./prisma.js";
+import { Client } from "whatsapp-web.js";
+import { PostgresAuth } from "./sessions/postgres-auth.js";
+import { handleMessage } from "./sessions/message-handler.js";
+import { resetRateLimit } from "./rate-limiter.js";
+import { notifyWeb } from "./webhook.js";
 
-/**
- * Sessions map: sessionId -> Client instance
- */
 const sessions = new Map<string, Client>();
 
-/**
- * Create and initialize a WhatsApp session
- * Uses Postgres-backed LocalAuth to persist across restarts
- */
+const INIT_TIMEOUT_MS = 90_000; // 90s — enough for Puppeteer + WhatsApp page load
+
 export async function initializeSession(
   sessionId: string,
   orgId: string
 ): Promise<Client> {
-  // Check if already initialized
+  // If a client is already running for this session, destroy it first.
+  // This makes initializeSession idempotent and safe to call on reconnect.
   if (sessions.has(sessionId)) {
-    return sessions.get(sessionId)!;
+    console.log(`[Session] ${sessionId} already running — destroying before re-init`);
+    try {
+      await sessions.get(sessionId)!.destroy();
+    } catch {}
+    sessions.delete(sessionId);
   }
 
-  console.log(`[Session] Initializing ${sessionId} for org ${orgId}`);
+  console.log(`[Session] Initializing ${sessionId}`);
 
-  // Fetch session record
-  const session = await prisma.whatsAppSession.findUnique({
-    where: { id: sessionId },
-  });
+  let client!: Client;
+  let auth!: PostgresAuth;
 
-  if (!session) {
-    throw new Error(`Session ${sessionId} not found in database`);
-  }
-
-  // Initialize whatsapp-web.js client with Postgres-backed auth
-  const client = new Client({
-    authStrategy: new LocalAuth({
-      clientId: sessionId,
-      dataPath: "./sessions", // Will be encrypted/persisted
-    }),
-    puppeteer: {
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
-    },
-  });
-
-  /**
-   * QR code for user to scan
-   */
-  client.on("qr", (qr: string) => {
-    console.log("[Session] QR Code received:"); // In prod: emit via Pusher to frontend
-    qrcode.generate(qr, { small: true });
-
-    // TODO: Emit to Pusher so dashboard can show QR
-    // await pusher.trigger(`session:${sessionId}`, "qr-code", { qr });
-  });
-
-  /**
-   * Session ready
-   */
-  client.on("ready", async () => {
-    console.log(`[Session] ${sessionId} ready`);
-
-    // Get phone number
-    const phoneNumber = client.info?.me?.user;
-
-    // Update session status in DB
-    await prisma.whatsAppSession.update({
-      where: { id: sessionId },
-      data: {
-        status: "CONNECTED",
-        phoneNumber: phoneNumber ? `+${phoneNumber}` : null,
-        lastConnectedAt: new Date(),
-        lastErrorAt: null,
-        errorMessage: null,
-      },
-    });
-
-    // TODO: Emit connected event to Pusher
-  });
-
-  /**
-   * Incoming message
-   */
-  client.on("message", async (msg) => {
-    // TODO: messageListener(msg, sessionId, orgId);
-  });
-
-  /**
-   * Session disconnected
-   */
-  client.on("disconnected", async () => {
-    console.log(`[Session] ${sessionId} disconnected`);
-
-    await prisma.whatsAppSession.update({
-      where: { id: sessionId },
-      data: { status: "DISCONNECTED" },
-    });
-
-    sessions.delete(sessionId);
-  });
-
-  /**
-   * Error
-   */
-  client.on("auth_failure", async () => {
-    console.error(`[Session] ${sessionId} auth failure`);
-
-    await prisma.whatsAppSession.update({
-      where: { id: sessionId },
-      data: {
-        status: "ERROR",
-        errorMessage: "Authentication failure",
-        lastErrorAt: new Date(),
-      },
-    });
-
-    sessions.delete(sessionId);
-  });
-
-  // Initialize (will show QR if first login)
   try {
-    await client.initialize();
-    sessions.set(sessionId, client);
-  } catch (err) {
-    console.error(`[Session] Failed to initialize ${sessionId}:`, err);
+    const session = await prisma.whatsAppSession.findUnique({ where: { id: sessionId } });
+    if (!session) throw new Error(`Session ${sessionId} not found`);
 
-    await prisma.whatsAppSession.update({
-      where: { id: sessionId },
-      data: {
-        status: "ERROR",
-        errorMessage: String(err),
-        lastErrorAt: new Date(),
+    auth = new PostgresAuth(sessionId);
+
+    // Use system Chrome if available — avoids Chromium download and starts faster
+    const systemChrome =
+      process.env.CHROME_PATH ??
+      (process.platform === "darwin"
+        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        : process.platform === "linux"
+        ? "/usr/bin/google-chrome-stable"
+        : undefined);
+
+    client = new Client({
+      authStrategy: auth as any,
+      puppeteer: {
+        headless: true,
+        executablePath: systemChrome,
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--no-zygote",
+          "--no-first-run",
+          "--disable-extensions",
+          "--disable-component-extensions-with-background-pages",
+          "--disable-default-apps",
+          "--disable-background-networking",
+          "--disable-background-timer-throttling",
+          "--disable-renderer-backgrounding",
+          "--disable-hang-monitor",
+          "--disable-sync",
+          "--disable-translate",
+          "--metrics-recording-only",
+          "--safebrowsing-disable-auto-update",
+          "--password-store=basic",
+          "--use-mock-keychain",
+        ],
       },
     });
 
+    // Add to map BEFORE initialize so the disconnected event handler can find it
+    sessions.set(sessionId, client);
+
+    // IMPORTANT: Register all listeners BEFORE client.initialize()
+    client.on("qr", async (qr: string) => {
+      console.log(`[Session] QR generated for ${sessionId}`);
+      await prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: { pendingQr: qr, status: "CONNECTING" },
+      });
+      await notifyWeb("session.qr", { sessionId, orgId, qr });
+    });
+
+    client.on("ready", async () => {
+      const phoneNumber = (client as any).info?.me?.user;
+      const fullPhone = phoneNumber ? `+${phoneNumber}` : null;
+      console.log(`[Session] ${sessionId} ready — phone: ${fullPhone}`);
+
+      await auth.afterAuthReady();
+
+      if (fullPhone) {
+        await prisma.whatsAppSession.updateMany({
+          where: { orgId, phoneNumber: fullPhone, id: { not: sessionId } },
+          data: { phoneNumber: null },
+        });
+      }
+
+      await prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: {
+          status: "CONNECTED",
+          phoneNumber: fullPhone,
+          lastConnectedAt: new Date(),
+          errorMessage: null,
+          pendingQr: null,
+        },
+      });
+      await notifyWeb("session.connected", { sessionId, orgId, phoneNumber: fullPhone });
+    });
+
+    client.on("message", async (msg: any) => {
+      await handleMessage(msg, sessionId, orgId, "INBOUND");
+    });
+
+    client.on("message_create", async (msg: any) => {
+      if (msg.fromMe) {
+        await handleMessage(msg, sessionId, orgId, "OUTBOUND");
+      }
+    });
+
+    client.on("disconnected", async (reason: string) => {
+      console.log(`[Session] ${sessionId} disconnected — reason: ${reason}`);
+      sessions.delete(sessionId);
+      resetRateLimit(sessionId);
+      await prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: { status: "DISCONNECTED", pendingQr: null },
+      });
+      await notifyWeb("session.disconnected", { sessionId, orgId });
+    });
+
+    client.on("auth_failure", async (msg: string) => {
+      console.error(`[Session] ${sessionId} auth failure: ${msg}`);
+      sessions.delete(sessionId);
+      await prisma.whatsAppSession.update({
+        where: { id: sessionId },
+        data: { status: "ERROR", errorMessage: "Authentication failed — scan QR again", pendingQr: null },
+      });
+      await notifyWeb("session.error", { sessionId, orgId });
+    });
+
+  } catch (err) {
+    // Setup failed before we even started initialize() — ensure session never stays CONNECTING
+    sessions.delete(sessionId);
+    console.error(`[Session] ${sessionId} setup failed:`, err);
+    await prisma.whatsAppSession.updateMany({
+      where: { id: sessionId },
+      data: { status: "ERROR", errorMessage: "Failed to start session — try reconnecting", pendingQr: null },
+    });
+    await notifyWeb("session.error", { sessionId, orgId });
+    throw err;
+  }
+
+  // Race initialize against a timeout so we don't hang forever
+  const initPromise = client.initialize();
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("Session init timeout after 90s")), INIT_TIMEOUT_MS)
+  );
+
+  try {
+    await Promise.race([initPromise, timeoutPromise]);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // "frame detached" means stop() was called mid-init — not an error, just cancelled
+    const cancelled = msg.includes("detached") || msg.includes("disposed") || msg.includes("destroyed");
+    console.log(`[Session] ${sessionId} init ${cancelled ? "cancelled" : "failed"}:`, msg);
+    sessions.delete(sessionId);
+    try { await client.destroy(); } catch {}
+    await prisma.whatsAppSession.updateMany({
+      where: { id: sessionId },
+      data: {
+        status: cancelled ? "DISCONNECTED" : "ERROR",
+        errorMessage: cancelled ? null : "Connection failed — try reconnecting",
+        pendingQr: null,
+      },
+    });
+    if (!cancelled) {
+      await notifyWeb("session.error", { sessionId, orgId });
+    }
     throw err;
   }
 
   return client;
 }
 
-/**
- * Get active session client
- */
 export function getSession(sessionId: string): Client | undefined {
   return sessions.get(sessionId);
 }
 
-/**
- * Gracefully disconnect session
- */
-export async function disconnectSession(sessionId: string) {
+export async function disconnectSession(sessionId: string): Promise<void> {
   const client = sessions.get(sessionId);
-  if (!client) return;
-
-  console.log(`[Session] Disconnecting ${sessionId}`);
-  await client.destroy();
   sessions.delete(sessionId);
+  resetRateLimit(sessionId);
 
-  await prisma.whatsAppSession.update({
+  if (client) {
+    console.log(`[Session] Destroying client for ${sessionId}`);
+    try { await client.destroy(); } catch {}
+  }
+
+  // updateMany silently no-ops if the session was deleted from DB
+  await prisma.whatsAppSession.updateMany({
     where: { id: sessionId },
-    data: { status: "DISCONNECTED" },
+    data: { status: "DISCONNECTED", pendingQr: null },
   });
 }
 
-/**
- * Reconnect all active sessions on startup
- */
-export async function reconnectAllSessions() {
-  console.log("[Session] Reconnecting all active sessions...");
+export async function reconnectAllSessions(): Promise<void> {
+  // Stale CONNECTING sessions from a previous crashed run — reset them so users can retry manually
+  const staleConnecting = await prisma.whatsAppSession.findMany({
+    where: { status: "CONNECTING" },
+    select: { id: true },
+  });
+  if (staleConnecting.length > 0) {
+    await prisma.whatsAppSession.updateMany({
+      where: { id: { in: staleConnecting.map((s) => s.id) } },
+      data: { status: "DISCONNECTED", pendingQr: null },
+    });
+    console.log(`[Session] Reset ${staleConnecting.length} stale CONNECTING session(s) to DISCONNECTED`);
+  }
 
-  const activeSessions = await prisma.whatsAppSession.findMany({
-    where: {
-      orgId: { not: null }, // Get all
-    },
+  // Resume sessions that were CONNECTED before restart
+  const active = await prisma.whatsAppSession.findMany({
+    where: { status: "CONNECTED" },
+    select: { id: true, orgId: true },
   });
 
-  for (const session of activeSessions) {
-    if (session.status === "CONNECTED") {
-      try {
-        await initializeSession(session.id, session.orgId);
-      } catch (err) {
-        console.error(`[Session] Failed to reconnect ${session.id}:`, err);
-      }
-    }
+  console.log(`[Session] Reconnecting ${active.length} previously-connected session(s)...`);
+
+  // Limit concurrent reconnects to avoid spawning too many Chrome instances at once
+  const CONCURRENCY = 3;
+  for (let i = 0; i < active.length; i += CONCURRENCY) {
+    const batch = active.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map((s) =>
+        initializeSession(s.id, s.orgId).catch((err) => {
+          console.error(`[Session] Failed to reconnect ${s.id}:`, err);
+        })
+      )
+    );
   }
 }
 
-/**
- * Check session health
- */
 export function isSessionHealthy(sessionId: string): boolean {
   const client = sessions.get(sessionId);
-  return client?.pupPage?.isClosed?.() === false;
+  return !!(client && !(client as any).pupPage?.isClosed?.());
 }

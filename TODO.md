@@ -1,7 +1,7 @@
 # UniboxAI Build Phases
 
 ## Current Phase
-**Phase 2: Dashboard Scaffold** — Next
+**Phase 10: Launch** — Up next
 
 ## Phases
 
@@ -21,88 +21,86 @@
 - [x] Run full test suite locally (16 tests: 8 database + 8 web)
 - [x] All tests passing (100%)
 
-**Results:**
-- 2 test files in packages/database (multi-tenancy, clerk-webhook)
-- 1 test file in apps/web (auth & RBAC)
-- 16 total test cases covering:
-  - Multi-tenancy isolation (5 tests)
-  - Clerk webhook sync (3 tests)
-  - tRPC auth middleware (3 tests)
-  - Role-based access control (4 tests)
-  - Cross-org access prevention (1 test)
-
 **Commit:** `feat: phase 1 complete - auth & multi-tenancy testing (16 vitest cases)`
 
-### Phase 2: Dashboard Scaffold
-- [ ] Basic Next.js app layout with Clerk auth
-- [ ] `/dashboard` main page (org stats, recent messages)
-- [ ] tRPC routers for org/user/message queries
-- [ ] Shadcn components (Button, Card, Input, Dialog, DataTable)
-- **Blockers:** Phase 1
+### Phase 2: Dashboard Scaffold ✅
+- [x] Basic Next.js app layout with Clerk auth + protected routes
+- [x] `/dashboard` overview page (stats cards, recent messages, recent todos, AI activity)
+- [x] `/dashboard/messages` — full inbox UI with working send box, AI to-do panel
+- [x] `/dashboard/todos` — todo list with priority badges
+- [x] `/dashboard/sessions` — session table + consent → QR connect flow
+- [x] `/dashboard/team` — member table with roles
+- [x] `/dashboard/settings` — org settings page
+- [x] tRPC routers scaffolded (org, message, todo, session)
+- [x] Middleware auth (Clerk redirect for protected routes)
+- [ ] tRPC → DB live queries (blocked on DATABASE_URL)
 
-### Phase 3: WhatsApp Worker Foundation
-- [ ] Postgres-backed auth store
-- [ ] Message pipeline (listener → DB → event)
-- [ ] Rate limiter (1 msg/sec, exponential backoff)
-- [ ] Session lifecycle (start, connect, disconnect, cleanup)
-- [ ] `worker:sandbox` test mode
-- **Blockers:** Phase 0 (database)
+**Note:** UI is complete with mock data. tRPC routers are wired — go live once DATABASE_URL is connected.
 
-### Phase 4: AI Todo Detection
-- [ ] Claude integration with Sonnet 4.6
-- [ ] Message batching (30s window, direction=OUTBOUND)
-- [ ] Cost guards (min 10 chars, not already processed)
-- [ ] Todo extraction prompt
-- [ ] Store todos in DB, emit Pusher events to dashboard
-- **Blockers:** Phase 3 + API key
+### Phase 3: WhatsApp Worker Foundation ✅
+- [x] Postgres-backed auth store (replace LocalAuth in sessions.ts)
+- [x] Message pipeline (listener → DB → Pusher event)
+- [x] Rate limiter wired into send path (1 msg/sec, exponential backoff)
+- [x] Session lifecycle: start, connect, disconnect, cleanup
+- [x] Web → Worker command channel (Redis pub/sub)
+- [x] Worker → Web webhook (POST /api/webhooks/worker)
+- [x] `worker:sandbox` test mode
+- [x] Health check endpoint (:3001)
+- [x] Graceful degradation (CONNECTING sessions picked up on restart)
 
-### Phase 5: Real-Time UI (Pusher)
-- [ ] Pusher private channels setup
-- [ ] `/api/pusher/auth` endpoint
-- [ ] Dashboard message stream + real-time updates
-- [ ] Todo notifications on client
-- **Blockers:** Phase 2
+### Phase 4: AI Todo Detection ✅
+- [x] Claude integration with Sonnet 4.6 (tool-choice forced, structured output)
+- [x] Message batching (30s window, direction=OUTBOUND) — via existing BullMQ debounce
+- [x] Cost guards (min 10 chars, not already processed) — existing gates + aiProcessed flag
+- [x] Todo extraction prompt + structured output (`src/ai/prompts/extract-todo.ts`)
+- [x] Store todos in DB, emit Pusher `private-{orgId}-todos` event
+- [x] DetectionLog table for confidence < 0.7 detections (prompt tuning)
 
-### Phase 6: Billing (Stripe)
+### Phase 5: Real-Time UI (Pusher) ✅
+- [x] Pusher private channels setup (`app/lib/pusher-client.ts` singleton)
+- [x] `/api/pusher/auth` endpoint (was already built in Phase 2)
+- [x] `usePusherChannel` hook (`app/hooks/usePusherChannel.ts`)
+- [x] Dashboard overview: live message + todo prepend via `private-{orgId}-{messages,todos}`
+- [x] Messages page: live inbound/outbound messages, new conversation creation
+- [x] Todos page: live todo prepend + client-side mark-done
+
+### Phase 6: Billing (Stripe) — SKIPPED
 - [ ] Org subscription model
 - [ ] `/api/webhooks/stripe` for events
 - [ ] Stripe portal link
 - [ ] Message usage tracking + metering
 - [ ] Paywall for free tier
-- **Blockers:** Phase 2
 
-### Phase 7: Settings & Session Management
-- [ ] Consent screen for new WA sessions
-- [ ] Session list, status, disconnect
-- [ ] Org/member management UI
-- [ ] tRPC mutations for all
-- **Blockers:** Phase 2 + Phase 3
+### Phase 7: Settings & Session Management ✅
+- [x] Consent screen wired to real tRPC create mutation + live QR via Pusher
+- [x] Session list, status, disconnect (real tRPC mutations + Pusher live updates)
+- [x] Org settings page: real updateOrg mutation
+- [x] Team page: real listMembers + updateMemberRole + removeMember
 
-### Phase 8: Monitoring & Hardening
-- [ ] Sentry error tracking
-- [ ] Logging strategy
-- [ ] Rate limit response headers
-- [ ] Retry logic for message sends
-- [ ] Graceful degradation
-- **Blockers:** Phase 4+
+### Phase 8: Monitoring & Hardening ✅
+- [x] Sentry in web (@sentry/nextjs) and worker (@sentry/node)
+- [x] Rate limiter with exponential backoff (BullMQ retry 2s→4s→8s)
+- [x] Graceful degradation (CONNECTING sessions drained on restart)
+- [ ] Rate limit response headers (deferred — no REST API, tRPC handles this differently)
+- [ ] Logging strategy (console.log for now — structured logging deferred to Phase 9)
 
-### Phase 9: Deployment
-- [ ] Vercel (web), Fly.io (worker)
-- [ ] Environment setup (secrets, Redis, DB)
-- [ ] CI/CD (typecheck, lint, test on PR)
-- [ ] Database migrations in prod
-- **Blockers:** Phase 8
+### Phase 9: Deployment ✅
+- [x] `apps/whatsapp-worker/Dockerfile` — Node 20 + Chromium for Fly.io
+- [x] `apps/whatsapp-worker/fly.toml` — health check, 1x shared CPU / 512MB
+- [x] `vercel.json` — monorepo build + `prisma migrate deploy` pre-build
+- [x] `.github/workflows/ci.yml` — typecheck + lint + test on every PR
+- [x] `.env.example` — all required vars documented
 
-### Phase 10: Launch
-- [ ] Landing page
-- [ ] Onboarding flow
-- [ ] Docs
-- [ ] Go live
-- **Blockers:** Phase 9
+### Phase 10: Launch 🚧
+- [x] Landing page (`app/page.tsx` — hero, features, CTA)
+- [x] Onboarding flow (`app/onboarding/page.tsx` — org name → session create → done)
+- [ ] Docs (user-facing help / README)
+- [ ] Go live (set env vars, run `pnpm db:migrate`, deploy to Vercel + Fly)
+- **Blockers:** DATABASE_URL + UPSTASH_URL needed to activate live queries
 
 ---
 
 ## Notes
-- Verify `pnpm typecheck && pnpm test` before Phase 1
 - Check `agent_docs/multi-tenancy.md` before adding any DB query
 - Check `agent_docs/whatsapp-worker.md` before writing worker code
+- `pnpm worker:sandbox` for testing worker without a real WA number

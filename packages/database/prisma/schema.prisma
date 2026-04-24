@@ -2,8 +2,9 @@
 // Multi-tenant SaaS for unified WhatsApp inbox management
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 generator client {
@@ -29,6 +30,7 @@ model Organization {
   // Messages and todos
   messages Message[]
   todos    Todo[]
+  invites  Invite[]
 
   // Billing
   subscription Subscription?
@@ -55,6 +57,9 @@ model User {
   // Role-based access
   role Role @default(EMPLOYEE)
 
+  // WhatsApp sessions owned by this user
+  sessions WhatsAppSession[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -76,6 +81,10 @@ model WhatsAppSession {
   orgId String
   org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
 
+  // Employee who owns this session
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   // Session metadata
   phoneNumber String? // E164 format: +1234567890
   name        String?
@@ -90,6 +99,9 @@ model WhatsAppSession {
   // Credentials (encrypted by Postgres)
   authData Json? // Persisted LocalAuth data
 
+  // Ephemeral QR (cleared on connect or disconnect)
+  pendingQr String?
+
   // Messages
   messages Message[]
 
@@ -98,6 +110,7 @@ model WhatsAppSession {
 
   @@unique([orgId, phoneNumber])
   @@index([orgId])
+  @@index([userId])
   @@index([status])
 }
 
@@ -233,6 +246,45 @@ enum SubscriptionStatus {
   PAST_DUE
   CANCELED
   PAUSED
+}
+
+// ==================== Employee Invitations ====================
+
+model Invite {
+  id    String @id @default(cuid())
+  token String @unique @default(cuid())
+
+  orgId String
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  email     String
+  role      Role     @default(EMPLOYEE)
+  expiresAt DateTime
+
+  // Set once the invited user completes sign-up/sign-in
+  acceptedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([token])
+  @@index([orgId])
+  @@index([email])
+}
+
+// ==================== AI Detection Log (low-confidence detections for prompt tuning) ====================
+
+model DetectionLog {
+  id String @id @default(cuid())
+
+  orgId     String
+  messageId String
+  rawOutput Json
+  confidence Float
+
+  createdAt DateTime @default(now())
+
+  @@index([orgId])
+  @@index([messageId])
 }
 
 // ==================== Rate Limiting (optional session state) ====================
