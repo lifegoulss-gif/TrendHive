@@ -1,14 +1,10 @@
-import { withSentryConfig } from "@sentry/nextjs";
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@repo/shared", "@repo/database"],
-  serverExternalPackages: ["@prisma/client", "redis"],
+  // Keep these out of webpack bundling — they use native bindings or
+  // dynamic requires that break when bundled for serverless.
+  serverExternalPackages: ["@prisma/client", "redis", "bullmq", "ioredis"],
 };
 
-// Skip Sentry in development — it adds 500+ second compile times
-const isDev = process.env.NODE_ENV === "development";
-export default isDev
-  ? nextConfig
-  : withSentryConfig(nextConfig, { silent: true, telemetry: false });
+export default nextConfig;
