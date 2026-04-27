@@ -2,7 +2,7 @@ import { type Prisma, prisma } from "@repo/database";
 import { TRPCError } from "@trpc/server";
 import { Resend } from "resend";
 import { z } from "zod";
-import { protectedProcedure, router } from "../trpc";
+import { protectedProcedure, requireRole, router } from "../trpc";
 
 const resend = process.env.RESEND_API_KEY
 	? new Resend(process.env.RESEND_API_KEY)
@@ -181,5 +181,62 @@ export const todoRouter = router({
 			}
 
 			return prisma.todo.delete({ where: { id: todoId } });
+		}),
+
+	/**
+	 * MANAGER+ oversight: all org todos, cursor-paginated, with employee info.
+	 * "missed" = incomplete with a past due date; "completed" = done.
+	 */
+	listForDashboard: requireRole("MANAGER")
+		.input(
+			z.object({
+				status: z.enum(["missed", "completed"]),
+				limit: z.number().min(1).max(100).default(50),
+				cursor: z.string().optional(),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const now = new Date();
+			const where: Prisma.TodoWhereInput = {
+				orgId: ctx.orgId,
+				...(input.status === "missed"
+					? { completed: false, dueDate: { lt: now } }
+					: { completed: true }),
+			};
+
+			const items = await prisma.todo.findMany({
+				where,
+				take: input.limit + 1,
+				cursor: input.cursor ? { id: input.cursor } : undefined,
+				orderBy:
+					input.status === "missed"
+						? { dueDate: "asc" }
+						: { completedAt: "desc" },
+				include: {
+					message: {
+						select: {
+							from: true,
+							to: true,
+							direction: true,
+							session: {
+								select: {
+									name: true,
+									phoneNumber: true,
+									user: {
+										select: { id: true, name: true, email: true },
+									},
+								},
+							},
+						},
+					},
+				},
+			});
+
+			let nextCursor: string | undefined;
+			if (items.length > input.limit) {
+				nextCursor = items.pop()!.id;
+			}
+
+			return { items, nextCursor };
 		}),
 });

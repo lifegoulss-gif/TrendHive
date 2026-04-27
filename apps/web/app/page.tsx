@@ -1,6 +1,36 @@
+import { auth } from "@clerk/nextjs/server";
+import { prisma } from "@repo/database";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import SetupWait from "./components/SetupWait";
 
-export default function LandingPage() {
+async function getSignedInRole(): Promise<
+	"OWNER" | "MANAGER" | "EMPLOYEE" | "pending" | null
+> {
+	try {
+		const { userId } = await auth();
+		if (!userId) return null;
+		const user = await prisma.user.findUnique({
+			where: { clerkId: userId },
+			select: { role: true },
+		});
+		return user?.role ?? "pending";
+	} catch {
+		return null;
+	}
+}
+
+export default async function LandingPage() {
+	if (process.env.NODE_ENV !== "development") {
+		const role = await getSignedInRole();
+		if (role === "OWNER" || role === "MANAGER") redirect("/dashboard");
+		if (role === "EMPLOYEE") redirect("/dashboard/todos");
+		if (role === "pending") return <SetupWait />;
+	}
+	return <LandingContent />;
+}
+
+function LandingContent() {
 	return (
 		<div
 			className="min-h-screen bg-white flex flex-col"
